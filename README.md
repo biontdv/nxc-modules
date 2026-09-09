@@ -33,13 +33,11 @@ This module does the whole thing and hands you a ready-to-use ticket.
 
 ### Demo — OffSec Proving Grounds: *Resourced*
 
-<video src="https://github.com/biontdv/nxc-modules/raw/main/assets/demo-resourced.mp4" controls muted width="100%"></video>
+<a href="https://github.com/biontdv/nxc-modules/releases/download/v0.1.0/demo-resourced.mp4">
+  <img src="assets/demo-resourced.gif" alt="rbcd module: GenericAll on the DC to Administrator + krbtgt in one nxc run" width="100%">
+</a>
 
-*(video not playing inline? &nbsp;[**▶ watch it here**](https://github.com/biontdv/nxc-modules/raw/main/assets/demo-resourced.mp4))*
-
-Foothold user `L.Livingstone` (leaked in an ntds.dit backup on an open share) has
-`GenericAll` on `RESOURCEDC$`. One `nxc` run later: `Administrator` and `krbtgt`
-hashes.
+<sub>▶ <a href="https://github.com/biontdv/nxc-modules/releases/download/v0.1.0/demo-resourced.mp4">full-quality recording (mp4)</a> &nbsp;·&nbsp; 0:30 &nbsp;·&nbsp; foothold user with <code>GenericAll</code> on <code>RESOURCEDC$</code> (leaked in an ntds.dit backup on an open share) &rarr; <code>Administrator</code> and <code>krbtgt</code> hashes</sub>
 
 ### Before / after
 
